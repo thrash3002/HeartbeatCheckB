@@ -1,15 +1,16 @@
 ﻿using Npgsql;
+using System.Net.Http;
 
 namespace HeartbeatCheckB
 {
     public class RefreshService : BackgroundService
     {
-        HttpClient _httpClient;
+        IHttpClientFactory _httpClientFactory;
         int _refreshRateMillis;
 
         public RefreshService(IHttpClientFactory httpClientFactory)
         {
-            _httpClient = httpClientFactory.CreateClient();
+            _httpClientFactory = httpClientFactory;
             _refreshRateMillis = StaticOutputs.RefreshRateInSeconds * 1000;
         }
 
@@ -18,35 +19,59 @@ namespace HeartbeatCheckB
             while(!stoppingToken.IsCancellationRequested)
             {
                 var startTime = DateTime.UtcNow;
+                var delayTask = Task.Delay(_refreshRateMillis, stoppingToken).ConfigureAwait(false);
 
-                Task[] tasks = { RefreshSite(), RefreshDb() };
+                List<Task> tasks = RefreshSites();
+                tasks.Add(RefreshDb());
                 await Task.WhenAll(tasks).ConfigureAwait(false);
-
+                
                 StaticOutputs.LastCheckedTimeStampUTC = DateTime.UtcNow.ToString();
                 var totalTime = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-                Console.WriteLine("Time taken to refresh: " + totalTime + "ms");
-                await Task.Delay(_refreshRateMillis, stoppingToken).ConfigureAwait(false);
+                Console.WriteLine("Total Time taken to refresh: " + (int)totalTime + "ms");
+                //await Task.Delay(_refreshRateMillis, stoppingToken).ConfigureAwait(false);
+                await delayTask;
+                totalTime = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
+                Console.WriteLine();
+                Console.WriteLine("Total Time since last refresh: " + (int)totalTime + "ms");
             }
         }
-
-        async Task RefreshSite()
+        List<Task> RefreshSites()
         {
-            if (StaticOutputs.SiteToCheck is not null)
+            var tasks = new List<Task>();
+            if (StaticOutputs.CanReachSites is not null)
             {
+                foreach (var site in StaticOutputs.CanReachSites.Keys)
+                {
+                    tasks.Add(RefreshSite(site));
+                }
+            }
+            return tasks;
+        }
+
+        async Task RefreshSite(string site)
+        {
+            if (StaticOutputs.CanReachSites is not null &&
+                site is not null)
+            {
+                var startTime = DateTime.UtcNow;
                 try
                 {
-                    var response = await _httpClient.GetAsync(StaticOutputs.SiteToCheck).ConfigureAwait(false);
-                    StaticOutputs.CanReachSite = response.IsSuccessStatusCode ? "TRUE" : "FALSE";
+                    var _httpClient = _httpClientFactory.CreateClient();
+                    var response = await _httpClient.GetAsync(site).ConfigureAwait(false);
+                    StaticOutputs.CanReachSites[site] = response.IsSuccessStatusCode ? "TRUE" : "FALSE";
                 }
                 catch (InvalidOperationException)
                 {
-                    StaticOutputs.CanReachSite = "ERROR: site URL in app settings is invalid or incomplete";
+                    StaticOutputs.CanReachSites[site] = "ERROR: site URL in app settings is invalid or incomplete";
                 }
+                var totalTime = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
+                Console.WriteLine("Time taken to refresh " + site + ": " + (int)totalTime + "ms");
             }
         }
 
         async Task RefreshDb()
         {
+            var startTime = DateTime.UtcNow;
             try
             {
                 using (NpgsqlConnection connection = new(StaticOutputs.DatabaseDetails))
@@ -71,6 +96,8 @@ namespace HeartbeatCheckB
                 Console.WriteLine("ERROR: database connection details in app settings are invalid: " + ex.Message);
                 StaticOutputs.CanReachDatabase = "ERROR: database connection details in app settings are invalid";
             }
+            var totalTime = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
+            Console.WriteLine("Time taken to refresh database: " + (int)totalTime + "ms");
         }
     }
 }

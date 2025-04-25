@@ -1,18 +1,29 @@
 using HeartbeatCheckB;
+using Microsoft.Extensions.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 
 StaticOutputs.DatabaseDetails = 
     builder.Configuration.GetConnectionString(
         builder.Environment.ContentRootPath.Equals("/app") ? 
-        "DockerDBConnectionString" : 
-        "DBConnectionString");
+            "DockerDBConnectionString" : 
+            "DBConnectionString"
+    );
 
-StaticOutputs.SiteToCheck = builder.Configuration.GetValue<string>("SiteToCheck");
+string[]? sitesToCheck = builder.Configuration.GetSection("SitesToCheck").Get<string[]>();
+if(sitesToCheck is not null)
+{
+    StaticOutputs.CanReachSites = new Dictionary<string, string?>();
+    foreach(var site in sitesToCheck)
+    {
+        StaticOutputs.CanReachSites.Add(site, null);
+    }
+}
 var useDefaultRefreshRate = 
     !int.TryParse(
         builder.Configuration.GetValue<string>("RefreshRateInSeconds"), 
-        out StaticOutputs.RefreshRateInSeconds);
+        out StaticOutputs.RefreshRateInSeconds
+    );
 if(useDefaultRefreshRate)
 {
     StaticOutputs.RefreshRateInSeconds = 10; // default
